@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+psycopg[binary]
+alembic
+pydantic-settings
+prometheus-fastapi-instrumentator
+pytest
+httpx
