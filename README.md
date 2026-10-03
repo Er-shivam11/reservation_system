@@ -1,365 +1,296 @@
-## 1. File structure — Django vs FastAPI
-
-### Django version — for future
-
-```text
-seat-reservation/
-│
-├── manage.py
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .env
-├── .gitignore
-│
-├── config/
-│   ├── settings.py
-│   ├── urls.py
-│   ├── asgi.py
-│   └── wsgi.py
-│
-├── reservations/
-│   ├── migrations/
-│   ├── admin.py
-│   ├── apps.py
-│   ├── models.py
-│   ├── serializers.py
-│   ├── views.py
-│   ├── urls.py
-│   ├── services.py
-│   └── tests.py
-│
-├── scripts/
-│   └── burst.py
-│
-├── README.md
-└── WRITEUP.md
-```
-
-Django gives us a lot automatically:
-
-```text
-Django
- ├── ORM
- ├── migrations
- ├── admin
- ├── authentication
- └── DRF
-```
-
----
-
-### FastAPI version — **our project**
-
-```text
-seat-reservation/
-│
-├── app/
-│   ├── main.py
-│   ├── config.py
-│   ├── database.py
-│   │
-│   ├── models/
-│   │   ├── show.py
-│   │   ├── seat.py
-│   │   └── reservation.py
-│   │
-│   ├── schemas/
-│   │   ├── show.py
-│   │   └── reservation.py
-│   │
-│   ├── api/
-│   │   ├── shows.py
-│   │   ├── reservations.py
-│   │   └── health.py
-│   │
-│   ├── services/
-│   │   └── reservation_service.py
-│   │
-│   ├── middleware/
-│   │   └── request_id.py
-│   │
-│   └── metrics.py
-│
-├── tests/
-│   ├── test_shows.py
-│   ├── test_reservations.py
-│   ├── test_idempotency.py
-│   ├── test_concurrency.py
-│   └── test_auth.py
-│
-├── scripts/
-│   └── burst.py
-│
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-└── WRITEUP.md
-```
-
-### The important flow
-
-```text
-HTTP Request
-     ↓
-api/
-     ↓
-schemas/
-     ↓
-services/
-     ↓
-models/
-     ↓
-PostgreSQL
-```
-
-And **all the difficult reservation correctness logic lives in:**
-
-```text
-app/services/reservation_service.py
-```
-
-That's the file you'll be able to discuss deeply in the interview.
-
----
-
-# 2. `README.md` — our execution checklist
-
-We'll keep the actual project README concise. This is the checklist we'll follow from zero → GitHub → deployment.
-
-
 # Seat Reservation at Scale
 
-FastAPI + PostgreSQL backend for concurrent seat reservation with transaction safety, idempotency, per-user limits, observability, and load testing.
+Production-ready seat reservation API built with **FastAPI + PostgreSQL**, designed for concurrent reservations with transaction safety, idempotency, per-user limits, cancellation, observability, and load testing.
 
-## Implementation Checklist
+## Live Deployment
 
-### Phase 1 — Project Setup
+**Base URL**
 
-- [ ] Create GitHub repository
-- [ ] Initialize FastAPI project
-- [ ] Create project structure
-- [ ] Add `requirements.txt`
-- [ ] Add `.env` / `.env.example`
-- [ ] Add `.gitignore`
-- [ ] Create Dockerfile
-- [ ] Create docker-compose with FastAPI + PostgreSQL
-- [ ] Run application locally
+https://reservationsystem-production-41a7.up.railway.app
 
-### Phase 2 — Database
+### Live Endpoints
 
-- [ ] Create `shows` table
-- [ ] Create `show_seats` table
-- [ ] Create `reservations` table
-- [ ] Create `reservation_seats` table
-- [ ] Add required foreign keys
-- [ ] Add unique constraints
-- [ ] Add indexes
-- [ ] Add database initialization/migrations
+- **API Documentation:**  
+  https://reservationsystem-production-41a7.up.railway.app/docs
 
-### Phase 3 — Show API
+- **Liveness:**  
+  https://reservationsystem-production-41a7.up.railway.app/health/live
 
-- [ ] `POST /shows`
-- [ ] Create show
-- [ ] Create all seats as `available`
-- [ ] Validate duplicate seat numbers
-- [ ] Return created show
+- **Readiness:**  
+  https://reservationsystem-production-41a7.up.railway.app/health/ready
 
-### Phase 4 — Authentication
+- **Prometheus Metrics:**  
+  https://reservationsystem-production-41a7.up.railway.app/metrics
 
-- [ ] Add simple token-based authentication
-- [ ] Derive `user_id` from token
-- [ ] Never trust `user_id` from request body
-- [ ] Add authentication tests
+## Source Code
 
-### Phase 5 — Reservation
+**GitHub Repository:**  
+https://github.com/Er-shivam11/reservation_system
 
-- [ ] `POST /shows/{id}/reserve`
-- [ ] Validate requested seats
-- [ ] Implement idempotency key
-- [ ] Store request hash
-- [ ] Implement per-user seat limit
-- [ ] Implement all-or-nothing multi-seat reservation
-- [ ] Lock seats using PostgreSQL row locking
-- [ ] Lock seats in deterministic order
-- [ ] Create reservation atomically
-- [ ] Return `201` on success
-- [ ] Return `409` for domain conflicts
-- [ ] Ensure no reservation path returns 5xx for normal contention
+## Live Demo Data
 
-### Phase 6 — Cancellation
+A sample show can be created using `POST /shows`:
 
-- [ ] `POST /reservations/{id}/cancel`
-- [ ] Verify reservation owner
-- [ ] Lock reservation/seats
-- [ ] Cancel reservation atomically
-- [ ] Return seats to `available`
-- [ ] Prevent invalid/double cancellation
-- [ ] Test re-booking after cancellation
+```json
+{
+  "name": "Paytm Reservation Demo",
+  "seats": [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5"
+  ],
+  "price_paise": 25000
+}
+```
 
-### Phase 7 — Show State
+This creates:
 
-- [ ] `GET /shows/{id}`
-- [ ] Return every seat
-- [ ] Return available/held/confirmed status
-- [ ] Return seat counts
-- [ ] Verify:
+- 1 show in `shows`
+- 10 seats in `show_seats`
+
+After making a reservation, the related records can be verified in:
+
+- `reservations`
+- `reservation_seats`
+- `show_user_counters`
+
+The resulting `show_id` is returned by the API and can be used with:
+
+```text
+GET /shows/{show_id}
+POST /shows/{show_id}/reserve
+POST /reservations/{reservation_id}/cancel
+```
+
+## Tech Stack
+
+- Python
+- FastAPI
+- PostgreSQL
+- SQLAlchemy
+- Alembic
+- Docker
+- Prometheus
+- Railway
+
+## Implemented Features
+
+- Create shows and seats
+- Token-based authentication
+- Concurrent seat reservation
+- PostgreSQL row-level locking
+- Deterministic seat locking
+- No double-selling
+- Per-user reservation limit
+- Idempotency keys
+- Idempotency request-body validation
+- All-or-nothing multi-seat reservation
+- Reservation cancellation
+- Seat re-booking after cancellation
+- Show seat-state API
+- Reconciliation invariant
+- Liveness and readiness health checks
+- Prometheus metrics
+- Structured JSON request logs
+- Request/correlation IDs
+- Concurrent burst testing
+
+## Correctness Under Concurrency
+
+The reservation transaction uses PostgreSQL row locking:
+
+```text
+Request
+   ↓
+Authenticate user
+   ↓
+Validate request
+   ↓
+Lock user reservation counter
+   ↓
+Lock requested seats in deterministic order
+   ↓
+Check per-user limit
+   ↓
+Check seat availability
+   ↓
+Create reservation
+   ↓
+Confirm seats
+   ↓
+Commit transaction
+```
+
+This ensures that concurrent requests cannot successfully reserve the same seat.
+
+## Idempotency
+
+Each reservation requires an `Idempotency-Key`.
+
+- Same user + same key + same request → original reservation is returned.
+- Same user + same key + different request → `409 Conflict`.
+- Concurrent retries with the same key produce a single reservation.
+
+## Per-User Limit
+
+The default reservation limit is **4 seats per user**.
+
+The limit is protected using a database counter locked with `SELECT ... FOR UPDATE`, making the check safe under concurrent requests.
+
+## Cancellation
+
+Users can cancel their own confirmed reservations.
+
+Cancellation:
+
+1. Locks the reservation.
+2. Locks associated seats.
+3. Releases the seats.
+4. Decrements the user's reservation counter.
+5. Commits atomically.
+
+Released seats can then be reserved again.
+
+## Show State
+
+`GET /shows/{show_id}` returns:
+
+- Every seat
+- Seat status
+- Available count
+- Held count
+- Confirmed count
+- Total seat count
+
+The reconciliation invariant is:
 
 ```text
 available + held + confirmed = total seats
 ```
 
-### Phase 8 — Correctness Tests
+## Burst Test
 
-- [ ] Same seat requested concurrently
-- [ ] Verify exactly one successful reservation
-- [ ] Verify all other requests receive `409`
-- [ ] Same idempotency key retried concurrently
-- [ ] Same key with different seats
-- [ ] Per-user limit under concurrency
-- [ ] Multiple-seat reservation under concurrency
-- [ ] Cancellation under concurrency
-- [ ] User spoofing test
-- [ ] Verify zero unexpected 5xx
+Run locally:
 
-### Phase 9 — Observability
-
-- [ ] Add `/health/live`
-- [ ] Add `/health/ready`
-- [ ] Readiness checks PostgreSQL
-- [ ] Add Prometheus `/metrics`
-- [ ] Add confirmed reservation counter
-- [ ] Add declined reservation counter by reason
-- [ ] Add available seats gauge
-- [ ] Add request/reservation latency metric
-- [ ] Add structured JSON logs
-- [ ] Add request/correlation ID
-
-### Phase 10 — Burst Test
-
-- [ ] Create `scripts/burst.py`
-- [ ] Add hot-seat concurrency test
-- [ ] Add random-seat concurrency test
-- [ ] Add idempotency retry test
-- [ ] Add per-user limit test
-- [ ] Print `201 / 409 / 5xx` distribution
-- [ ] Print final reconciliation
-- [ ] Verify:
-
-```text
-available + held + confirmed = total
+```bash
+python scripts/burst.py http://localhost:8000
 ```
 
-### Phase 11 — Deployment
+Run against the live service:
 
-- [ ] Build Docker image locally
-- [ ] Run clean Docker setup
-- [ ] Deploy PostgreSQL
-- [ ] Deploy FastAPI service
-- [ ] Configure environment variables
-- [ ] Verify cold start
-- [ ] Verify `/health/live`
-- [ ] Verify `/health/ready`
-- [ ] Verify `/docs`
-- [ ] Verify `/metrics`
-- [ ] Test live reservation API
-
-### Phase 12 — Attack the Live Service
-
-- [ ] Run burst script against live URL
-- [ ] Test hot-seat storm
-- [ ] Test same-user concurrency
-- [ ] Test idempotency retries
-- [ ] Check logs
-- [ ] Check metrics
-- [ ] Verify zero unexpected 5xx
-- [ ] Verify reconciliation invariant
-
-### Phase 13 — Documentation
-
-- [ ] Update README
-- [ ] Add API examples
-- [ ] Add local setup instructions
-- [ ] Add burst-test command
-- [ ] Add live URL
-- [ ] Create `WRITEUP.md`
-- [ ] Document atomic decision
-- [ ] Document idempotency
-- [ ] Document concurrency strategy
-- [ ] Document cancellation model
-- [ ] Document consistency vs availability
-- [ ] Document observability
-- [ ] Document AI usage
-
-### Phase 14 — Final Git
-
-- [ ] Review `.env` / secrets
-- [ ] Confirm clean checkout works
-- [ ] Run full test suite
-- [ ] Run final burst test
-- [ ] Review Git history
-- [ ] Push final code
-- [ ] Verify GitHub repository
-- [ ] Verify live deployment
-- [ ] Verify README
-- [ ] Prepare submission
-
-## Final Architecture
-
-```text
-Client
-   │
-   ▼
-FastAPI
-   │
-   ├── Authentication
-   ├── Validation
-   ├── Reservation Service
-   ├── Metrics
-   └── Structured Logging
-          │
-          ▼
-      PostgreSQL
-          │
-          ├── Shows
-          ├── Seats
-          └── Reservations
+```bash
+python scripts/burst.py https://reservationsystem-production-41a7.up.railway.app
 ```
 
-## Core Correctness Mechanism
+The burst test covers:
+
+- 500-user hot-seat storm
+- Per-user concurrency limit
+- Idempotency retries
+- Final seat reconciliation
+
+### Verified Local Result
 
 ```text
-PostgreSQL Transaction
-        │
-        ▼
-SELECT ... FOR UPDATE
-        │
-        ▼
-Lock requested seats
-        │
-        ▼
-Check idempotency
-        │
-        ▼
-Check user limit
-        │
-        ▼
-Check availability
-        │
-        ▼
-Create reservation
-        │
-        ▼
-Confirm seats
-        │
-        ▼
-COMMIT
+=== HOT-SEAT STORM ===
+201: 1
+409: 499
+5xx: 0
+
+=== PER-USER LIMIT ===
+201: 4
+409: 6
+5xx: 0
+
+=== IDEMPOTENCY RETRY ===
+201/200: 20
+409: 0
+Unique reservation IDs: 1
+
+=== FINAL RECONCILIATION ===
+Total:     100
+Available: 94
+Held:      0
+Confirmed: 6
+Calculated total: 100
+
+BURST TEST PASSED
 ```
 
-## Local Commands
+## Health Checks
+
+### Liveness
+
+```text
+GET /health/live
+```
+
+Confirms that the application process is running.
+
+### Readiness
+
+```text
+GET /health/ready
+```
+
+Checks PostgreSQL connectivity and fails with `503` when the database is unavailable.
+
+## Observability
+
+Prometheus metrics are available at:
+
+```text
+GET /metrics
+```
+
+Implemented metrics include:
+
+- Confirmed reservations
+- Declined reservations by reason
+- Available seats
+- Reservation latency
+- HTTP request metrics
+
+Requests also include structured JSON logging and an `X-Request-ID` correlation ID.
+
+## Deployment
+
+The application is containerized using Docker and deployed on Railway.
+
+Database schema is managed using Alembic migrations.
+
+## Project Structure
+
+```text
+seat-reservation/
+├── app/
+│   ├── api/
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   ├── middleware/
+│   ├── config.py
+│   ├── database.py
+│   ├── metrics.py
+│   └── main.py
+├── tests/
+├── scripts/
+│   └── burst.py
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── alembic.ini
+└── README.md
+```
+
+## Local Setup
 
 ```bash
 docker compose up --build
@@ -371,37 +302,28 @@ Run tests:
 pytest
 ```
 
-Run burst test:
-
-```bash
-python scripts/burst.py <BASE_URL>
-```
-
 API documentation:
 
 ```text
-GET /docs
+http://localhost:8000/docs
 ```
 
-Metrics:
+## AI Usage
 
-```text
-GET /metrics
-```
+AI assistance was used during development for architecture discussion, implementation guidance, debugging, test design, documentation, and review.
 
-Health:
+All application code was reviewed, executed, tested, and validated by the developer.
 
-```text
-GET /health/live
-GET /health/ready
-```
+## Submission
 
-### Our working rule
+**Live API:**  
+https://reservationsystem-production-41a7.up.railway.app
 
-We'll **not jump around**.
+**GitHub:**  
+https://github.com/Er-shivam11/reservation_system
 
-We'll execute this checklist sequentially:
+**Swagger:**  
+https://reservationsystem-production-41a7.up.railway.app/docs
 
-**Setup → DB → Show → Auth → Reservation → Cancellation → State → Tests → Metrics/Logs → Burst → Docker → Deploy → Attack live → Docs → Submit.**
-
-And after each meaningful phase, make a Git commit so the Paytm reviewer can see the project evolving naturally.
+**Metrics:**  
+https://reservationsystem-production-41a7.up.railway.app/metrics

@@ -1,329 +1,470 @@
-# Seat Reservation at Scale
+# Seat Reservation at Scale — Technical Write-Up
 
-Production-ready seat reservation API built with **FastAPI + PostgreSQL**, designed for concurrent reservations with transaction safety, idempotency, per-user limits, cancellation, observability, and load testing.
+## 1. Architecture
 
-## Live Deployment
+The service is implemented using:
 
-**Base URL**
-
-https://reservationsystem-production-41a7.up.railway.app
-
-### Live Endpoints
-
-- **API Documentation:**  
-  https://reservationsystem-production-41a7.up.railway.app/docs
-
-- **Liveness:**  
-  https://reservationsystem-production-41a7.up.railway.app/health/live
-
-- **Readiness:**  
-  https://reservationsystem-production-41a7.up.railway.app/health/ready
-
-- **Prometheus Metrics:**  
-  https://reservationsystem-production-41a7.up.railway.app/metrics
-
-## Source Code
-
-**GitHub Repository:**  
-https://github.com/Er-shivam11/reservation_system
-
-## Live Demo Data
-
-A sample show can be created using `POST /shows` with:
-
-```json
-{
-  "name": "Paytm Reservation Demo",
-  "seats": [
-    "A1",
-    "A2",
-    "A3",
-    "A4",
-    "A5",
-    "B1",
-    "B2",
-    "B3",
-    "B4",
-    "B5"
-  ],
-  "price_paise": 25000
-}
-```
-
-This creates:
-
-- 1 show in `shows`
-- 10 seats in `show_seats`
-
-After making a reservation, the related records can be verified in:
-
-- `reservations`
-- `reservation_seats`
-- `show_user_counters`
-
-The resulting `show_id` is returned by the API and can be used with:
+- FastAPI for the HTTP API
+- PostgreSQL as the source of truth
+- SQLAlchemy for database access
+- Alembic for schema migrations
+- Docker for containerization
+- Prometheus-compatible metrics for observability
+- Railway for deployment
 
 ```text
-GET /shows/{show_id}
-POST /shows/{show_id}/reserve
+Client
+   |
+   v
+FastAPI
+   |
+   +-- Authentication
+   +-- Validation
+   +-- Reservation Service
+   +-- Metrics / Logging
+   |
+   v
+PostgreSQL
+   |
+   +-- shows
+   +-- show_seats
+   +-- reservations
+   +-- reservation_seats
+   +-- show_user_counters
+```
+
+PostgreSQL is responsible for reservation correctness. The reservation decision is not maintained in application memory.
+
+---
+
+## 2. Atomic Reservation Mechanism
+
+A reservation is performed inside a single PostgreSQL transaction.
+
+The important sequence is:
+
+```text
+BEGIN
+  |
+  +-- Authenticate user
+  |
+  +-- Initialize / lock user counter
+  |
+  +-- Lock requested seats
+  |
+  +-- Check per-user limit
+  |
+  +-- Check seat availability
+  |
+  +-- Create reservation
+  |
+  +-- Mark seats confirmed
+  |
+  +-- Update user counter
+  |
+COMMIT
+```
+
+Requested seats are locked using PostgreSQL row-level locking with:
+
+```sql
+SELECT ...
+FROM show_seats
+WHERE ...
+FOR UPDATE;
+```
+
+Because the seat rows are locked before availability is checked, concurrent transactions cannot both successfully reserve the same seat.
+
+The transaction is all-or-nothing for multi-seat reservations. If any requested seat is unavailable or invalid, the reservation is rejected without partially confirming the remaining seats.
+
+---
+
+## 3. Deterministic Locking and Deadlock Avoidance
+
+Multiple-seat requests can potentially request the same seats in different orders.
+
+For example:
+
+```text
+Request A: A1, A2
+Request B: A2, A1
+```
+
+The application normalizes and sorts requested seat numbers before locking them.
+
+Therefore both requests attempt to acquire seat locks in the same deterministic order:
+
+```text
+A1 → A2
+```
+
+This reduces lock-order inversion and helps prevent deadlocks between competing reservation transactions.
+
+---
+
+## 4. Idempotency
+
+Every reservation requires an `Idempotency-Key`.
+
+The database stores:
+
+- `show_id`
+- `user_id`
+- `idempotency_key`
+- `request_hash`
+
+A unique constraint protects the idempotency identity:
+
+```text
+show_id + user_id + idempotency_key
+```
+
+The request hash is generated from the normalized seat list.
+
+Therefore:
+
+### Same key + same request
+
+The existing reservation is returned.
+
+### Same key + different request
+
+The request is rejected with:
+
+```text
+409 Conflict
+```
+
+### Concurrent retries
+
+Concurrent requests using the same idempotency key cannot create multiple reservations.
+
+The database uniqueness constraint and transaction handling ensure that the original reservation is reused.
+
+---
+
+## 5. Per-User Reservation Limit
+
+Each show has a configurable per-user reservation limit.
+
+The default is:
+
+```text
+4 seats
+```
+
+A `show_user_counters` table maintains the number of confirmed seats held by each user for each show.
+
+The counter row is locked using:
+
+```sql
+SELECT ...
+FOR UPDATE;
+```
+
+The application then evaluates:
+
+```text
+current_count + requested_count <= per_user_limit
+```
+
+This check happens while the counter is locked, so concurrent requests from the same user cannot bypass the limit through race conditions.
+
+---
+
+## 6. Cancellation Model
+
+The assignment allows either explicit cancellation or time-based holds.
+
+This implementation uses **explicit cancellation**.
+
+A user can cancel their own confirmed reservation using:
+
+```text
 POST /reservations/{reservation_id}/cancel
 ```
 
-## Tech Stack
+Cancellation is transactional.
 
-- Python
-- FastAPI
-- PostgreSQL
-- SQLAlchemy
-- Alembic
-- Docker
-- Prometheus metrics
-- Railway
-
-## Implemented Features
-
-- Create shows and seats
-- Token-based authentication
-- Concurrent seat reservation
-- PostgreSQL row-level locking
-- Deterministic seat locking
-- No double-selling
-- Per-user reservation limit
-- Idempotency keys
-- Idempotency request-body validation
-- All-or-nothing multi-seat reservation
-- Reservation cancellation
-- Seat re-booking after cancellation
-- Show seat-state API
-- Reconciliation invariant
-- Liveness and readiness health checks
-- Prometheus metrics
-- Structured JSON request logs
-- Request/correlation IDs
-- Concurrent burst testing
-
-## Correctness Under Concurrency
-
-The reservation transaction uses PostgreSQL row locking:
-
-```text
-Request
-   ↓
-Authenticate user
-   ↓
-Validate request
-   ↓
-Lock user reservation counter
-   ↓
-Lock requested seats in deterministic order
-   ↓
-Check per-user limit
-   ↓
-Check seat availability
-   ↓
-Create reservation
-   ↓
-Confirm seats
-   ↓
-Commit transaction
-```
-
-This ensures that concurrent requests cannot successfully reserve the same seat.
-
-## Idempotency
-
-Each reservation requires an `Idempotency-Key`.
-
-- Same user + same key + same request → original reservation is returned.
-- Same user + same key + different request → `409 Conflict`.
-- Concurrent retries with the same key produce a single reservation.
-
-## Per-User Limit
-
-The default reservation limit is **4 seats per user**.
-
-The limit is protected using a database counter locked with `SELECT ... FOR UPDATE`, making the check safe under concurrent requests.
-
-## Cancellation
-
-Users can cancel their own confirmed reservations.
-
-Cancellation:
+The operation:
 
 1. Locks the reservation.
-2. Locks associated seats.
-3. Releases the seats.
-4. Decrements the user's reservation counter.
-5. Commits atomically.
+2. Locks its associated reservation-seat records.
+3. Locks the associated seats.
+4. Marks the seats as `available`.
+5. Decrements the user's reservation counter.
+6. Marks the reservation as `cancelled`.
+7. Commits the transaction.
 
-Released seats can then be reserved again.
+After a successful cancellation, the released seats can be reserved again.
 
-## Show State
+The reservation state is never changed back to confirmed by the cancellation operation, preventing an old cancellation request from resurrecting a previously completed reservation.
 
-`GET /shows/{show_id}` returns:
+---
 
-- Every seat
-- Seat status
-- Available count
-- Held count
-- Confirmed count
-- Total seat count
+## 7. Consistency vs Availability
 
-The reconciliation invariant is:
+The reservation path prioritizes **correctness and consistency** over accepting every concurrent request.
+
+For a hot seat:
+
+```text
+500 concurrent requests
+        |
+        v
+1 successful reservation
+        |
+        v
+499 conflict responses
+```
+
+A seat cannot be sold twice simply to improve request success rates.
+
+PostgreSQL acts as the serialization point for conflicting reservations.
+
+The API returns `409 Conflict` for expected business contention rather than returning a server error.
+
+---
+
+## 8. Reconciliation Invariant
+
+The show-state endpoint calculates:
+
+```text
+available
+held
+confirmed
+```
+
+The system maintains the invariant:
 
 ```text
 available + held + confirmed = total seats
 ```
 
-## Burst Test
+The burst test verifies this after concurrent activity.
 
-Run locally:
-
-```bash
-python scripts/burst.py http://localhost:8000
-```
-
-Run against the live service:
-
-```bash
-python scripts/burst.py https://reservationsystem-production-41a7.up.railway.app
-```
-
-The burst test covers:
-
-- 500-user hot-seat storm
-- Per-user concurrency limit
-- Idempotency retries
-- Final seat reconciliation
-
-### Verified Local Result
+The current implementation uses explicit cancellation rather than timed holds, so normal reservations have:
 
 ```text
-=== HOT-SEAT STORM ===
-201: 1
-409: 499
-5xx: 0
-
-=== PER-USER LIMIT ===
-201: 4
-409: 6
-5xx: 0
-
-=== IDEMPOTENCY RETRY ===
-201/200: 20
-409: 0
-Unique reservation IDs: 1
-
-=== FINAL RECONCILIATION ===
-Total:     100
-Available: 94
-Held:      0
-Confirmed: 6
-Calculated total: 100
-
-BURST TEST PASSED
+held = 0
 ```
 
-## Health Checks
+---
 
-### Liveness
+## 9. Authentication and Identity
+
+Reservation identity is derived from the authorization token.
+
+The request body does not contain a trusted `user_id`.
+
+The authenticated identity is passed into the reservation service from the authentication dependency.
+
+This prevents a client from attempting to reserve seats as another user by supplying a different user ID in the request body.
+
+The authentication mechanism is intentionally simple token-based authentication for the scope of the take-home exercise.
+
+---
+
+## 10. Observability
+
+The service exposes:
 
 ```text
 GET /health/live
+GET /health/ready
+GET /metrics
 ```
+
+### Liveness
 
 Confirms that the application process is running.
 
 ### Readiness
 
-```text
-GET /health/ready
-```
+Performs a PostgreSQL connectivity check and returns `503` if the database is unavailable.
 
-Checks PostgreSQL connectivity and fails with `503` when the database is unavailable.
+### Metrics
 
-## Observability
-
-Prometheus metrics are available at:
-
-```text
-GET /metrics
-```
-
-Implemented metrics include:
+The application exposes metrics for:
 
 - Confirmed reservations
 - Declined reservations by reason
 - Available seats
 - Reservation latency
-- HTTP request metrics
+- HTTP requests
 
-Requests also include structured JSON logging and an `X-Request-ID` correlation ID.
+Structured JSON request logs contain:
 
-## Deployment
+- Request ID
+- HTTP method
+- Path
+- Status code
+- Request duration
+
+The request ID is also returned through:
+
+```text
+X-Request-ID
+```
+
+This allows an individual request to be correlated with application logs.
+
+---
+
+## 11. Load Testing
+
+The project includes:
+
+```text
+scripts/burst.py
+```
+
+The script tests:
+
+- Hot-seat concurrency
+- Per-user reservation limits
+- Idempotency retries
+- Final reconciliation
+
+The local hot-seat test was executed with 500 concurrent users.
+
+Verified result:
+
+```text
+201: 1
+409: 499
+5xx: 0
+```
+
+The test also verified:
+
+```text
+available + held + confirmed = total seats
+```
+
+and completed successfully.
+
+---
+
+## 12. Database Design
+
+The main tables are:
+
+### `shows`
+
+Stores show-level configuration:
+
+- Show name
+- Ticket price in paise
+- Total seats
+- Per-user limit
+
+### `show_seats`
+
+Stores the authoritative state of every seat:
+
+- Show
+- Seat number
+- Status
+- Reserved user
+
+### `reservations`
+
+Stores reservation-level information:
+
+- User
+- Show
+- Amount
+- Status
+- Idempotency key
+- Request hash
+
+All monetary values are stored as integer **paise**, never floating-point values.
+
+### `reservation_seats`
+
+Maps reservations to individual seats.
+
+### `show_user_counters`
+
+Maintains the number of confirmed seats for each user/show combination.
+
+---
+
+## 13. Deployment
 
 The application is containerized using Docker and deployed on Railway.
 
-Database schema is managed using Alembic migrations.
+The database schema is initialized through Alembic migrations.
 
-## Project Structure
-
-```text
-seat-reservation/
-├── app/
-│   ├── api/
-│   ├── models/
-│   ├── schemas/
-│   ├── services/
-│   ├── middleware/
-│   ├── config.py
-│   ├── database.py
-│   ├── metrics.py
-│   └── main.py
-├── tests/
-├── scripts/
-│   └── burst.py
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── alembic.ini
-└── README.md
-```
-
-## Local Setup
-
-```bash
-docker compose up --build
-```
-
-Run tests:
-
-```bash
-pytest
-```
-
-API documentation:
+The deployed service exposes:
 
 ```text
-http://localhost:8000/docs
-```
-
-## AI Usage
-
-AI assistance was used during development for architecture discussion, implementation guidance, debugging, test design, documentation, and review.
-
-All application code was reviewed, executed, tested, and validated by the developer.
-
-## Submission
-
-**Live API:**  
 https://reservationsystem-production-41a7.up.railway.app
+```
 
-**GitHub:**  
-https://github.com/Er-shivam11/reservation_system
+Health and API endpoints are publicly accessible for verification.
 
-**Swagger:**  
-https://reservationsystem-production-41a7.up.railway.app/docs
+---
 
-**Metrics:**  
-https://reservationsystem-production-41a7.up.railway.app/metrics
+## 14. Testing Strategy
+
+The test suite covers:
+
+- Show creation
+- Seat reservation
+- Concurrent hot-seat reservation
+- Per-user limits
+- Multi-seat all-or-nothing behavior
+- Idempotency
+- Concurrent idempotency retries
+- Cancellation
+- Concurrent cancellation
+- Authentication identity
+- User spoofing attempts
+- Reconciliation
+
+The key concurrency acceptance criteria are:
+
+```text
+No duplicate confirmed seat
+No per-user limit violation
+No unexpected 5xx during normal contention
+No duplicate idempotent reservation
+Reconciliation invariant remains valid
+```
+
+---
+
+## 15. AI Usage
+
+AI assistance was used during development for:
+
+- Architecture discussion
+- Implementation guidance
+- Debugging
+- Concurrency test design
+- Documentation
+- Code review
+
+The implementation was executed, tested, debugged, and validated by the developer.
+
+---
+
+## 16. Future Improvements
+
+For a larger production system, the following could be added:
+
+- Stronger authentication such as OAuth2/JWT
+- Admin authorization for show creation
+- Time-based seat holds and automatic expiry
+- Payment integration with payment idempotency
+- Distributed tracing
+- Centralized log aggregation
+- Redis for non-critical caching
+- Kafka/event streaming for downstream analytics
+- Kubernetes-based deployment
+- Database connection-pool tuning based on measured production load
+- Dedicated migration jobs instead of running migrations during application startup

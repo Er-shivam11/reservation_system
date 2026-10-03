@@ -491,6 +491,89 @@ Database unavailable:
 
 **Why:** The service should fail closed instead of pretending it is ready.
 
+## Prometheus Metrics
+
+The application exposes metrics at:
+
+```text
+GET /metrics
+```
+
+### Reservation Counters
+
+```text
+reservations_confirmed_total
+reservations_declined_total{reason="..."}
+```
+
+The confirmed counter increases after a new reservation commits. Declined
+requests are counted by reason, including idempotent replay, idempotency-key
+conflict, seat already taken, per-user limit, and other reservation conflicts.
+
+**Why:** Counters help us see reservation volume and explain why requests are
+being rejected without treating expected business conflicts as server errors.
+
+### Available-Seat Gauge
+
+```text
+seats_available{show_id="..."}
+```
+
+The gauge is refreshed after show creation, reservation, and cancellation.
+Cancellation therefore increases the available-seat count when it releases
+seats.
+
+**Why:** A gauge describes a value that can go both up and down; it is more
+appropriate for current inventory than a counter.
+
+### Reservation and HTTP Latency
+
+```text
+reservation_latency_seconds
+http_request_duration_seconds
+```
+
+The reservation histogram records successful reservation-operation latency.
+The FastAPI instrumentator records HTTP request latency.
+
+**Why:** Separating business-operation latency from overall HTTP latency helps
+distinguish database/reservation work from time spent elsewhere in a request.
+
+### Metric Storage Caveat
+
+These Prometheus metrics are held in the API process's memory. Rebuilding or
+restarting the API resets their samples; production monitoring should scrape
+and persist them in a Prometheus server.
+
+## Request ID and Structured Request Logs
+
+`RequestIDMiddleware` accepts an incoming `X-Request-ID` or generates a UUID,
+stores it on the request, and returns it in the response header.
+
+Each completed request also emits one JSON log record containing the request
+ID, method, path, status code, and duration in milliseconds. The application
+logger is explicitly configured so these records reach Docker's container
+logs.
+
+**Why:** The response ID lets a client report a specific request, while the
+same ID in logs lets us find that request across application diagnostics.
+
+## Phase 8 Verification
+
+Verified locally with Docker Compose:
+
+```text
+GET /health/live  -> 200 and X-Request-ID returned
+GET /health/ready -> ready, database connected
+GET /metrics      -> application and HTTP metrics exposed
+```
+
+A reservation/replay, idempotency conflict, taken-seat decline,
+per-user-limit decline, and cancellation were exercised. The expected metric
+series appeared, cancellation refreshed the available-seat gauge, and JSON
+request records were visible in the API container logs. Temporary test data
+was removed after verification.
+
 ---
 
 # Current Position
@@ -503,15 +586,7 @@ Phase 4  ✅ Reservation
 Phase 5  ✅ Cancellation
 Phase 6  ✅ Show State
 Phase 7  ✅ Correctness Tests
-Phase 8  🟡 Health completed
-```
-
-## Remaining Phase 8
-
-```text
-⬜ Prometheus metrics
-⬜ Structured JSON logging
-⬜ Request/correlation ID
+Phase 8  ✅ Health & Observability
 ```
 
 Then:
