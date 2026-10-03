@@ -8,3 +8,4 @@ pydantic-settings
 prometheus-fastapi-instrumentator
 pytest
 httpx
+requests
